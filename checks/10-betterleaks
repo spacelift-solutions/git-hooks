@@ -4,8 +4,8 @@ set -euo pipefail
 mode="${1:-}"
 repository="${2:-}"
 
-if ! command -v gitleaks >/dev/null 2>&1; then
-  echo "gitleaks is unavailable; reinstall the shared hooks to provision it" >&2
+if ! command -v betterleaks >/dev/null 2>&1; then
+  echo "betterleaks is unavailable; run scripts/setup-tools or reinstall the shared hooks" >&2
   exit 2
 fi
 
@@ -17,10 +17,10 @@ common_arguments=(
 
 case "${mode}" in
   staged)
-    gitleaks "${common_arguments[@]}" --staged "${repository}"
+    betterleaks "${common_arguments[@]}" --staged "${repository}"
     ;;
   repository)
-    gitleaks "${common_arguments[@]}" "${repository}"
+    betterleaks "${common_arguments[@]}" "${repository}"
     ;;
   *)
     echo "unsupported check mode: ${mode}" >&2
