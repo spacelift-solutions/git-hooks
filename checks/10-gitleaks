@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+mode="${1:-}"
+repository="${2:-}"
+
+if ! command -v gitleaks >/dev/null 2>&1; then
+  echo "gitleaks is unavailable; reinstall the shared hooks to provision it" >&2
+  exit 2
+fi
+
+common_arguments=(
+  git
+  --redact
+  --no-banner
+)
+
+case "${mode}" in
+  staged)
+    gitleaks "${common_arguments[@]}" --staged "${repository}"
+    ;;
+  repository)
+    gitleaks "${common_arguments[@]}" "${repository}"
+    ;;
+  *)
+    echo "unsupported check mode: ${mode}" >&2
+    exit 2
+    ;;
+esac

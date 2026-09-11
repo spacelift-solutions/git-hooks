@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Managed by spacelift-solutions/git-hooks.
+set -euo pipefail
+
+previous_hook="$(git config --local --get spacelift.previousPreCommitHook || true)"
+if [[ -n "${previous_hook}" && -x "${previous_hook}" ]]; then
+  "${previous_hook}" "$@"
+fi
+
+hook_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+checks_root="$(cd -- "${hook_dir}/../spacelift-checks" && pwd)"
+
+export PATH="${checks_root}/tools:${PATH}"
+exec "${checks_root}/bin/run-checks" staged

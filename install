@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+source_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+target="${1:-.}"
+
+target_root="$(git -C "${target}" rev-parse --show-toplevel 2>/dev/null)" || {
+  echo "not a Git repository: ${target}" >&2
+  exit 2
+}
+
+common_git_dir="$(
+  git -C "${target_root}" rev-parse --path-format=absolute --git-common-dir
+)"
+effective_hooks_dir="$(
+  git -C "${target_root}" rev-parse --path-format=absolute --git-path hooks
+)"
+managed_hooks_dir="${common_git_dir}/spacelift-hooks"
+pre_commit_hook="${managed_hooks_dir}/pre-commit"
+managed_root="${common_git_dir}/spacelift-checks"
+
+if [[ -e "${pre_commit_hook}" ]] &&
+  ! grep -qF "Managed by spacelift-solutions/git-hooks." "${pre_commit_hook}"; then
+  echo "refusing to replace unmanaged hook: ${pre_commit_hook}" >&2
+  exit 1
+fi
+
+if [[ -e "${managed_root}" && ! -f "${managed_root}/.managed" ]]; then
+  echo "refusing to replace unmanaged directory: ${managed_root}" >&2
+  exit 1
+fi
+
+previous_hook="$(
+  git -C "${target_root}" config --local --get spacelift.previousPreCommitHook || true
+)"
+if [[ "${effective_hooks_dir}" != "${managed_hooks_dir}" ]]; then
+  previous_hook=""
+  if [[ -x "${effective_hooks_dir}/pre-commit" ]]; then
+    previous_hook="${effective_hooks_dir}/pre-commit"
+  fi
+fi
+
+temporary_root="$(mktemp -d "${managed_root}.tmp.XXXXXX")"
+trap 'rm -rf "${temporary_root}"' EXIT
+
+mkdir -p "${temporary_root}/bin" "${temporary_root}/checks" \
+  "${temporary_root}/config" "${temporary_root}/scripts"
+cp "${source_dir}/bin/run-checks" "${temporary_root}/bin/"
+cp "${source_dir}/checks/"* "${temporary_root}/checks/"
+cp "${source_dir}/config/tool-versions" "${temporary_root}/config/"
+cp "${source_dir}/scripts/setup-tools" "${temporary_root}/scripts/"
+
+"${source_dir}/scripts/setup-tools" "${temporary_root}/tools"
+
+revision="$(git -C "${source_dir}" rev-parse HEAD 2>/dev/null || echo unknown)"
+printf '%s\n' "${revision}" >"${temporary_root}/.managed"
+
+if [[ -d "${managed_root}" ]]; then
+  backup_root="${managed_root}.backup.$$"
+  mv "${managed_root}" "${backup_root}"
+  if ! mv "${temporary_root}" "${managed_root}"; then
+    mv "${backup_root}" "${managed_root}"
+    exit 1
+  fi
+  rm -rf "${backup_root}"
+else
+  mv "${temporary_root}" "${managed_root}"
+fi
+
+mkdir -p "${managed_hooks_dir}"
+install -m 0755 "${source_dir}/hooks/pre-commit" "${pre_commit_hook}"
+
+git -C "${target_root}" config --local core.hooksPath "${managed_hooks_dir}"
+if [[ -n "${previous_hook}" ]]; then
+  git -C "${target_root}" config --local \
+    spacelift.previousPreCommitHook "${previous_hook}"
+else
+  git -C "${target_root}" config --local \
+    --unset-all spacelift.previousPreCommitHook 2>/dev/null || true
+fi
+
+echo "Installed shared checks in ${target_root}"
+echo "Installed pre-commit hook at ${pre_commit_hook}"
+if [[ -n "${previous_hook}" ]]; then
+  echo "The managed hook will run existing hook ${previous_hook} first"
+fi
