@@ -44,13 +44,13 @@ temporary_root="$(mktemp -d "${managed_root}.tmp.XXXXXX")"
 trap 'rm -rf "${temporary_root}"' EXIT
 
 mkdir -p "${temporary_root}/bin" "${temporary_root}/checks" \
-  "${temporary_root}/config" "${temporary_root}/scripts"
+  "${temporary_root}/scripts"
 cp "${source_dir}/bin/run-checks" "${temporary_root}/bin/"
 cp "${source_dir}/checks/"* "${temporary_root}/checks/"
-cp "${source_dir}/config/tool-versions" "${temporary_root}/config/"
+cp "${source_dir}/Brewfile" "${temporary_root}/"
 cp "${source_dir}/scripts/setup-tools" "${temporary_root}/scripts/"
 
-"${source_dir}/scripts/setup-tools" "${temporary_root}/tools"
+"${source_dir}/scripts/setup-tools"
 
 revision="$(git -C "${source_dir}" rev-parse HEAD 2>/dev/null || echo unknown)"
 printf '%s\n' "${revision}" >"${temporary_root}/.managed"
