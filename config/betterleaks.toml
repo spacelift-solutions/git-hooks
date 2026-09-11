@@ -1,0 +1,5 @@
+title = "Spacelift shared Betterleaks config"
+betterleaksMinVersion = "v1.8.0"
+
+[extend]
+useDefault = true

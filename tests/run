@@ -20,8 +20,9 @@ export PATH="${temporary_dir}/fake-bin:${PATH}"
 "${repo_dir}/bin/run-checks" staged "${temporary_dir}" >/dev/null
 "${repo_dir}/bin/run-checks" repository "${temporary_dir}" >/dev/null
 
-expected_staged="git --redact --no-banner --staged ${temporary_dir}"
-expected_repository="git --redact --no-banner ${temporary_dir}"
+shared_config="${repo_dir}/config/betterleaks.toml"
+expected_staged="git --config ${shared_config} --redact --no-banner --staged ${temporary_dir}"
+expected_repository="git --config ${shared_config} --redact --no-banner ${temporary_dir}"
 mapfile_compatible_log="$(cat "${FAKE_BETTERLEAKS_LOG}")"
 expected_log="$(printf '%s\n%s' "${expected_staged}" "${expected_repository}")"
 
