@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+temporary_dir="$(mktemp -d)"
+trap 'rm -rf "${temporary_dir}"' EXIT
+
+git -C "${temporary_dir}" init --quiet
+
+mkdir -p "${temporary_dir}/fake-bin"
+cat >"${temporary_dir}/fake-bin/gitleaks" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"${FAKE_GITLEAKS_LOG}"
+EOF
+chmod +x "${temporary_dir}/fake-bin/gitleaks"
+
+export FAKE_GITLEAKS_LOG="${temporary_dir}/gitleaks.log"
+export PATH="${temporary_dir}/fake-bin:${PATH}"
+
+"${repo_dir}/bin/run-checks" staged "${temporary_dir}" >/dev/null
+"${repo_dir}/bin/run-checks" repository "${temporary_dir}" >/dev/null
+
+expected_staged="git --redact --no-banner --staged ${temporary_dir}"
+expected_repository="git --redact --no-banner ${temporary_dir}"
+mapfile_compatible_log="$(cat "${FAKE_GITLEAKS_LOG}")"
+expected_log="$(printf '%s\n%s' "${expected_staged}" "${expected_repository}")"
+
+if [[ "${mapfile_compatible_log}" != "${expected_log}" ]]; then
+  echo "Gitleaks received unexpected arguments" >&2
+  diff -u <(printf '%s\n' "${expected_log}") <(printf '%s\n' "${mapfile_compatible_log}") || true
+  exit 1
+fi
+
+mkdir -p "${temporary_dir}/extra-checks"
+cat >"${temporary_dir}/extra-checks/10-pass" <<'EOF'
+#!/usr/bin/env bash
+printf '%s|%s\n' "$1" "$2" >"${EXTENSION_LOG}"
+EOF
+chmod +x "${temporary_dir}/extra-checks/10-pass"
+
+export EXTENSION_LOG="${temporary_dir}/extension.log"
+SPACELIFT_CHECKS_DIR="${temporary_dir}/extra-checks" \
+  "${repo_dir}/bin/run-checks" repository "${temporary_dir}" >/dev/null
+
+if [[ "$(cat "${EXTENSION_LOG}")" != "repository|${temporary_dir}" ]]; then
+  echo "extension check did not receive the runner contract" >&2
+  exit 1
+fi
+
+cat >"${temporary_dir}/extra-checks/20-fail" <<'EOF'
+#!/usr/bin/env bash
+exit 1
+EOF
+chmod +x "${temporary_dir}/extra-checks/20-fail"
+
+if SPACELIFT_CHECKS_DIR="${temporary_dir}/extra-checks" \
+  "${repo_dir}/bin/run-checks" repository "${temporary_dir}" >/dev/null 2>&1; then
+  echo "runner did not propagate a check failure" >&2
+  exit 1
+fi
+
+echo "Tests passed."
