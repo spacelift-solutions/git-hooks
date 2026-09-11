@@ -75,7 +75,7 @@ git clone https://github.com/spacelift-solutions/git-hooks.git \
   "${XDG_DATA_HOME:-$HOME/.local/share}/spacelift-git-hooks"
 ```
 
-Then run the installer from any repository you want to protect:
+Run the installer once:
 
 ```sh
 "${XDG_DATA_HOME:-$HOME/.local/share}/spacelift-git-hooks/install"
@@ -84,12 +84,16 @@ Then run the installer from any repository you want to protect:
 The installer:
 
 - installs the repository's `Brewfile` with Homebrew;
-- configures a repository-local managed `pre-commit` hook; and
-- runs any existing local or global `pre-commit` hook first instead of
+- configures a managed global `core.hooksPath`;
+- protects every repository that does not override `core.hooksPath`; and
+- runs any existing global `pre-commit` hook first instead of
   replacing it.
 
 Update the local checks by pulling this repository and rerunning `install`.
-The installed files are outside the working tree and are not committed.
+The managed files live under
+`${XDG_DATA_HOME:-$HOME/.local/share}/spacelift/repository-checks`.
+Repository-local `core.hooksPath` settings still take precedence, and
+`git commit --no-verify` still bypasses local hooks.
 
 Run the checks without installing the hook:
 
@@ -112,5 +116,7 @@ and local installer both provision it through `scripts/setup-tools`.
 ## Betterleaks configuration
 
 Betterleaks automatically loads `.betterleaks.toml` from the repository being
-checked. Keep repository-specific configuration and exceptions there so local
-and CI behavior stays consistent.
+checked. When a repository has no local Betterleaks or Gitleaks config, both
+the local hook and Action use `config/betterleaks.toml` from this repository.
+That shared config currently extends Betterleaks' built-in defaults and is the
+place for organization-wide rules and exceptions.

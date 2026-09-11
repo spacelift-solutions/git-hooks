@@ -9,8 +9,22 @@ if ! command -v betterleaks >/dev/null 2>&1; then
   exit 2
 fi
 
+check_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+shared_config="$(cd -- "${check_dir}/../config" && pwd)/betterleaks.toml"
+config_arguments=()
+
+if [[ -z "${BETTERLEAKS_CONFIG:-}" &&
+  -z "${BETTERLEAKS_CONFIG_TOML:-}" &&
+  -z "${GITLEAKS_CONFIG:-}" &&
+  -z "${GITLEAKS_CONFIG_TOML:-}" &&
+  ! -f "${repository}/.betterleaks.toml" &&
+  ! -f "${repository}/.gitleaks.toml" ]]; then
+  config_arguments=(--config "${shared_config}")
+fi
+
 common_arguments=(
   git
+  "${config_arguments[@]}"
   --redact
   --no-banner
 )
