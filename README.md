@@ -3,7 +3,7 @@
 Shared repository checks for local Git hooks and GitHub Actions.
 
 Both entrypoints call `bin/run-checks`. The local hook scans staged changes,
-while the Action scans the repository's Git history. Gitleaks is the first
+while the Action scans the repository's Git history. Betterleaks is the first
 check, but the runner is intentionally check-agnostic so more controls can be
 added without changing how repositories consume it.
 
@@ -16,6 +16,8 @@ name: Repository checks
 
 on:
   pull_request:
+    branches:
+      - main
   push:
     branches:
       - main
@@ -25,6 +27,7 @@ permissions:
 
 jobs:
   checks:
+    name: Spacelift repository checks
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -37,6 +40,25 @@ jobs:
 `fetch-depth: 0` is required so checks can inspect the complete history. Make
 the resulting workflow a required status check in the repository's ruleset.
 CI is the enforcement boundary; local hooks can always be bypassed.
+
+### Configure a repository
+
+Use the bootstrap script to install the workflow and protect `main`:
+
+```sh
+scripts/setup-repository spacelift-solutions/example-repository
+```
+
+It creates or updates the managed workflow, then creates or updates the
+`Require The Four Ghostman review` repository ruleset. The ruleset:
+
+- requires the `Spacelift repository checks` status check;
+- requires one approval from The Four Ghostman team; and
+- dismisses approvals whenever new commits are pushed.
+
+The script refuses to replace an unmanaged workflow. Use `--dry-run` to inspect
+the generated ruleset without changing the target repository. It requires an
+authenticated `gh` CLI with repository administration access.
 
 ## Local hook
 
@@ -55,8 +77,7 @@ Then run the installer from any repository you want to protect:
 
 The installer:
 
-- provisions the pinned tool versions into the target repository's Git
-  metadata;
+- installs the repository's `Brewfile` with Homebrew;
 - configures a repository-local managed `pre-commit` hook; and
 - runs any existing local or global `pre-commit` hook first instead of
   replacing it.
@@ -79,11 +100,11 @@ Add an executable to `checks/`. The runner calls each executable with:
 <check> <staged|repository> <absolute-repository-path>
 ```
 
-Add any pinned dependency setup to `scripts/setup-tools`. The Action and local
-installer both use that setup path, keeping tool versions aligned.
+Add dependencies to `Brewfile` when a new check needs another tool. The Action
+and local installer both provision it through `scripts/setup-tools`.
 
-## Gitleaks configuration
+## Betterleaks configuration
 
-Gitleaks automatically loads `.gitleaks.toml` and `.gitleaksignore` from the
-repository being checked. Keep repository-specific exceptions there so local
+Betterleaks automatically loads `.betterleaks.toml` from the repository being
+checked. Keep repository-specific configuration and exceptions there so local
 and CI behavior stays consistent.

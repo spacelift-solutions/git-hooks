@@ -1,0 +1,203 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+readonly RULESET_NAME="Require The Four Ghostman review"
+readonly REVIEWER_TEAM="the-four-ghostman"
+readonly REQUIRED_CHECK="Spacelift repository checks"
+readonly WORKFLOW_PATH=".github/workflows/spacelift-repository-checks.yml"
+
+usage() {
+  echo "usage: $0 [--dry-run] <owner/repository>" >&2
+}
+
+dry_run=false
+if [[ "${1:-}" == "--dry-run" ]]; then
+  dry_run=true
+  shift
+fi
+
+repository="${1:-}"
+if [[ -z "${repository}" || "${repository}" != */* || -n "${2:-}" ]]; then
+  usage
+  exit 2
+fi
+
+for dependency in gh jq base64; do
+  if ! command -v "${dependency}" >/dev/null 2>&1; then
+    echo "required command is unavailable: ${dependency}" >&2
+    exit 2
+  fi
+done
+
+owner="${repository%%/*}"
+default_branch="$(gh api "repos/${repository}" --jq .default_branch)"
+if [[ "${default_branch}" != "main" ]]; then
+  echo "${repository} uses ${default_branch} as its default branch; expected main" >&2
+  exit 1
+fi
+
+team_id="$(gh api "orgs/${owner}/teams/${REVIEWER_TEAM}" --jq .id)"
+
+temporary_dir="$(mktemp -d)"
+trap 'rm -rf "${temporary_dir}"' EXIT
+
+workflow_file="${temporary_dir}/workflow.yml"
+cat >"${workflow_file}" <<'EOF'
+# Managed by spacelift-solutions/git-hooks.
+name: Repository checks
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: Spacelift repository checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: spacelift-solutions/git-hooks@v1
+EOF
+
+contents_endpoint="repos/${repository}/contents/${WORKFLOW_PATH}"
+workflow_sha=""
+metadata_error="${temporary_dir}/metadata-error"
+
+if workflow_metadata="$(
+  gh api "${contents_endpoint}?ref=main" 2>"${metadata_error}"
+)"; then
+  workflow_sha="$(jq -r .sha <<<"${workflow_metadata}")"
+  existing_workflow="$(
+    gh api -H "Accept: application/vnd.github.raw+json" \
+      "${contents_endpoint}?ref=main"
+  )"
+
+  if [[ "${existing_workflow}" == "$(cat "${workflow_file}")" ]]; then
+    echo "Workflow is already current in ${repository}."
+    workflow_sha="unchanged"
+  elif ! grep -qF "Managed by spacelift-solutions/git-hooks." \
+    <<<"${existing_workflow}"; then
+    echo "refusing to replace unmanaged workflow: ${WORKFLOW_PATH}" >&2
+    exit 1
+  fi
+elif ! grep -qF "(HTTP 404)" "${metadata_error}"; then
+  cat "${metadata_error}" >&2
+  exit 1
+fi
+
+if [[ "${workflow_sha}" != "unchanged" ]]; then
+  workflow_payload="${temporary_dir}/workflow-payload.json"
+  encoded_workflow="$(base64 <"${workflow_file}" | tr -d '\n')"
+
+  jq -n \
+    --arg message "Configure Spacelift repository checks" \
+    --arg content "${encoded_workflow}" \
+    --arg branch main \
+    --arg sha "${workflow_sha}" \
+    '{
+      message: $message,
+      content: $content,
+      branch: $branch
+    } + if $sha == "" then {} else {sha: $sha} end' \
+    >"${workflow_payload}"
+
+  if [[ "${dry_run}" == true ]]; then
+    echo "Would write ${WORKFLOW_PATH} to ${repository}."
+  else
+    gh api --method PUT "${contents_endpoint}" \
+      --input "${workflow_payload}" >/dev/null
+    echo "Installed ${WORKFLOW_PATH} in ${repository}."
+  fi
+fi
+
+ruleset_payload="${temporary_dir}/ruleset.json"
+jq -n \
+  --arg name "${RULESET_NAME}" \
+  --arg check "${REQUIRED_CHECK}" \
+  --argjson team_id "${team_id}" \
+  '{
+    name: $name,
+    target: "branch",
+    enforcement: "active",
+    bypass_actors: [],
+    conditions: {
+      ref_name: {
+        include: ["refs/heads/main"],
+        exclude: []
+      }
+    },
+    rules: [
+      {
+        type: "pull_request",
+        parameters: {
+          required_approving_review_count: 0,
+          dismiss_stale_reviews_on_push: true,
+          required_reviewers: [
+            {
+              minimum_approvals: 1,
+              file_patterns: ["*"],
+              reviewer: {
+                id: $team_id,
+                type: "Team"
+              }
+            }
+          ],
+          require_code_owner_review: true,
+          dismissal_restriction: {
+            enabled: false,
+            allowed_actors: []
+          },
+          require_last_push_approval: false,
+          required_review_thread_resolution: false,
+          require_extra_approval_for_unattributed_changes: true,
+          allowed_merge_methods: ["merge", "squash", "rebase"]
+        }
+      },
+      {
+        type: "required_status_checks",
+        parameters: {
+          required_status_checks: [
+            {
+              context: $check
+            }
+          ],
+          strict_required_status_checks_policy: true,
+          do_not_enforce_on_create: false
+        }
+      }
+    ]
+  }' >"${ruleset_payload}"
+
+ruleset_id="$(
+  gh api "repos/${repository}/rulesets" |
+    jq -r --arg name "${RULESET_NAME}" \
+      '.[] | select(.name == $name and .source_type == "Repository") | .id' |
+    awk 'NR == 1'
+)"
+
+if [[ "${dry_run}" == true ]]; then
+  if [[ -n "${ruleset_id}" ]]; then
+    echo "Would update ruleset ${ruleset_id} in ${repository}:"
+  else
+    echo "Would create ruleset in ${repository}:"
+  fi
+  jq . "${ruleset_payload}"
+elif [[ -n "${ruleset_id}" ]]; then
+  gh api --method PUT "repos/${repository}/rulesets/${ruleset_id}" \
+    --input "${ruleset_payload}" >/dev/null
+  echo "Updated required checks and reviews for main in ${repository}."
+else
+  gh api --method POST "repos/${repository}/rulesets" \
+    --input "${ruleset_payload}" >/dev/null
+  echo "Created required checks and reviews for main in ${repository}."
+fi

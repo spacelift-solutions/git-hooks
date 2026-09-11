@@ -8,13 +8,13 @@ trap 'rm -rf "${temporary_dir}"' EXIT
 git -C "${temporary_dir}" init --quiet
 
 mkdir -p "${temporary_dir}/fake-bin"
-cat >"${temporary_dir}/fake-bin/gitleaks" <<'EOF'
+cat >"${temporary_dir}/fake-bin/betterleaks" <<'EOF'
 #!/usr/bin/env bash
-printf '%s\n' "$*" >>"${FAKE_GITLEAKS_LOG}"
+printf '%s\n' "$*" >>"${FAKE_BETTERLEAKS_LOG}"
 EOF
-chmod +x "${temporary_dir}/fake-bin/gitleaks"
+chmod +x "${temporary_dir}/fake-bin/betterleaks"
 
-export FAKE_GITLEAKS_LOG="${temporary_dir}/gitleaks.log"
+export FAKE_BETTERLEAKS_LOG="${temporary_dir}/betterleaks.log"
 export PATH="${temporary_dir}/fake-bin:${PATH}"
 
 "${repo_dir}/bin/run-checks" staged "${temporary_dir}" >/dev/null
@@ -22,11 +22,11 @@ export PATH="${temporary_dir}/fake-bin:${PATH}"
 
 expected_staged="git --redact --no-banner --staged ${temporary_dir}"
 expected_repository="git --redact --no-banner ${temporary_dir}"
-mapfile_compatible_log="$(cat "${FAKE_GITLEAKS_LOG}")"
+mapfile_compatible_log="$(cat "${FAKE_BETTERLEAKS_LOG}")"
 expected_log="$(printf '%s\n%s' "${expected_staged}" "${expected_repository}")"
 
 if [[ "${mapfile_compatible_log}" != "${expected_log}" ]]; then
-  echo "Gitleaks received unexpected arguments" >&2
+  echo "Betterleaks received unexpected arguments" >&2
   diff -u <(printf '%s\n' "${expected_log}") <(printf '%s\n' "${mapfile_compatible_log}") || true
   exit 1
 fi

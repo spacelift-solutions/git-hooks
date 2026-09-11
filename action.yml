@@ -12,10 +12,7 @@ runs:
   steps:
     - name: Set up check dependencies
       shell: bash
-      run: |
-        tools_dir="${RUNNER_TEMP}/spacelift-checks/tools"
-        "${GITHUB_ACTION_PATH}/scripts/setup-tools" "${tools_dir}"
-        echo "${tools_dir}" >> "${GITHUB_PATH}"
+      run: "${GITHUB_ACTION_PATH}/scripts/setup-tools"
 
     - name: Run repository checks
       shell: bash
