@@ -49,8 +49,8 @@ Use the bootstrap script to install the workflow and protect `main`:
 scripts/setup-repository spacelift-solutions/example-repository
 ```
 
-It creates or updates the managed workflow, then creates or updates two
-repository rulesets:
+It opens or updates a managed pull request for the workflow, then creates or
+updates two repository rulesets:
 
 - `Require The Four Ghostman review` requires one team approval and dismisses
   approvals whenever new commits are pushed.

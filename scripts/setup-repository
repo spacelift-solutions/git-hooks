@@ -80,13 +80,11 @@ jobs:
 EOF
 
 contents_endpoint="repos/${repository}/contents/${WORKFLOW_PATH}"
-workflow_sha=""
 metadata_error="${temporary_dir}/metadata-error"
+workflow_current=false
 
-if workflow_metadata="$(
-  gh api "${contents_endpoint}?ref=main" 2>"${metadata_error}"
-)"; then
-  workflow_sha="$(jq -r .sha <<<"${workflow_metadata}")"
+if gh api "${contents_endpoint}?ref=main" \
+  >"${temporary_dir}/workflow-metadata" 2>"${metadata_error}"; then
   existing_workflow="$(
     gh api -H "Accept: application/vnd.github.raw+json" \
       "${contents_endpoint}?ref=main"
@@ -94,7 +92,7 @@ if workflow_metadata="$(
 
   if [[ "${existing_workflow}" == "$(cat "${workflow_file}")" ]]; then
     echo "Workflow is already current in ${repository}."
-    workflow_sha="unchanged"
+    workflow_current=true
   elif ! grep -qF "Managed by spacelift-solutions/git-hooks." \
     <<<"${existing_workflow}"; then
     echo "refusing to replace unmanaged workflow: ${WORKFLOW_PATH}" >&2
@@ -105,28 +103,76 @@ elif ! grep -qF "(HTTP 404)" "${metadata_error}"; then
   exit 1
 fi
 
-if [[ "${workflow_sha}" != "unchanged" ]]; then
-  workflow_payload="${temporary_dir}/workflow-payload.json"
-  encoded_workflow="$(base64 <"${workflow_file}" | tr -d '\n')"
-
-  jq -n \
-    --arg message "Configure Spacelift repository checks" \
-    --arg content "${encoded_workflow}" \
-    --arg branch main \
-    --arg sha "${workflow_sha}" \
-    '{
-      message: $message,
-      content: $content,
-      branch: $branch
-    } + if $sha == "" then {} else {sha: $sha} end' \
-    >"${workflow_payload}"
+if [[ "${workflow_current}" == false ]]; then
+  setup_branch="automation/spacelift-repository-checks"
 
   if [[ "${dry_run}" == true ]]; then
-    echo "Would write ${WORKFLOW_PATH} to ${repository}."
+    echo "Would create or update a pull request for ${WORKFLOW_PATH} in ${repository}."
   else
+    main_sha="$(
+      gh api "repos/${repository}/git/ref/heads/main" --jq .object.sha
+    )"
+    ref_error="${temporary_dir}/ref-error"
+    open_pr_url="$(
+      gh pr list --repo "${repository}" --state open \
+        --head "${setup_branch}" --json url --jq '.[0].url // empty'
+    )"
+
+    if ! gh api "repos/${repository}/git/ref/heads/${setup_branch}" \
+      >/dev/null 2>"${ref_error}"; then
+      if grep -qF "(HTTP 404)" "${ref_error}"; then
+        gh api --method POST "repos/${repository}/git/refs" \
+          -f ref="refs/heads/${setup_branch}" \
+          -f sha="${main_sha}" >/dev/null
+      else
+        cat "${ref_error}" >&2
+        exit 1
+      fi
+    elif [[ -z "${open_pr_url}" ]]; then
+      gh api --method PATCH \
+        "repos/${repository}/git/refs/heads/${setup_branch}" \
+        -f sha="${main_sha}" -F force=true >/dev/null
+    fi
+
+    branch_workflow_sha=""
+    if branch_workflow_metadata="$(
+      gh api "${contents_endpoint}?ref=${setup_branch}" 2>"${metadata_error}"
+    )"; then
+      branch_workflow_sha="$(jq -r .sha <<<"${branch_workflow_metadata}")"
+    elif ! grep -qF "(HTTP 404)" "${metadata_error}"; then
+      cat "${metadata_error}" >&2
+      exit 1
+    fi
+
+    workflow_payload="${temporary_dir}/workflow-payload.json"
+    encoded_workflow="$(base64 <"${workflow_file}" | tr -d '\n')"
+
+    jq -n \
+      --arg message "Configure Spacelift repository checks" \
+      --arg content "${encoded_workflow}" \
+      --arg branch "${setup_branch}" \
+      --arg sha "${branch_workflow_sha}" \
+      '{
+        message: $message,
+        content: $content,
+        branch: $branch
+      } + if $sha == "" then {} else {sha: $sha} end' \
+      >"${workflow_payload}"
+
     gh api --method PUT "${contents_endpoint}" \
       --input "${workflow_payload}" >/dev/null
-    echo "Installed ${WORKFLOW_PATH} in ${repository}."
+
+    if [[ -z "${open_pr_url}" ]]; then
+      open_pr_url="$(
+        gh pr create --repo "${repository}" \
+          --base main \
+          --head "${setup_branch}" \
+          --title "Configure Spacelift repository checks" \
+          --body "Installs the shared Betterleaks workflow for pull requests and pushes targeting \`main\`."
+      )"
+    fi
+
+    echo "Workflow pull request: ${open_pr_url}"
   fi
 fi
 fi
