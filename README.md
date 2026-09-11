@@ -49,12 +49,13 @@ Use the bootstrap script to install the workflow and protect `main`:
 scripts/setup-repository spacelift-solutions/example-repository
 ```
 
-It creates or updates the managed workflow, then creates or updates the
-`Require The Four Ghostman review` repository ruleset. The ruleset:
+It creates or updates the managed workflow, then creates or updates two
+repository rulesets:
 
-- requires the `Spacelift repository checks` status check;
-- requires one approval from The Four Ghostman team; and
-- dismisses approvals whenever new commits are pushed.
+- `Require The Four Ghostman review` requires one team approval and dismisses
+  approvals whenever new commits are pushed.
+- `Require Spacelift repository checks` requires the shared status check while
+  allowing The Four Ghostman team to bypass that check when necessary.
 
 The script refuses to replace an unmanaged workflow. Use `--dry-run` to inspect
 the generated ruleset without changing the target repository. It requires an

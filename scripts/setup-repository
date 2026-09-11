@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-readonly RULESET_NAME="Require The Four Ghostman review"
+readonly REVIEW_RULESET_NAME="Require The Four Ghostman review"
+readonly CHECK_RULESET_NAME="Require Spacelift repository checks"
 readonly REVIEWER_TEAM="the-four-ghostman"
 readonly REQUIRED_CHECK="Spacelift repository checks"
 readonly WORKFLOW_PATH=".github/workflows/spacelift-repository-checks.yml"
@@ -120,10 +121,9 @@ if [[ "${workflow_sha}" != "unchanged" ]]; then
   fi
 fi
 
-ruleset_payload="${temporary_dir}/ruleset.json"
+review_ruleset_payload="${temporary_dir}/review-ruleset.json"
 jq -n \
-  --arg name "${RULESET_NAME}" \
-  --arg check "${REQUIRED_CHECK}" \
+  --arg name "${REVIEW_RULESET_NAME}" \
   --argjson team_id "${team_id}" \
   '{
     name: $name,
@@ -162,7 +162,33 @@ jq -n \
           require_extra_approval_for_unattributed_changes: true,
           allowed_merge_methods: ["merge", "squash", "rebase"]
         }
-      },
+      }
+    ]
+  }' >"${review_ruleset_payload}"
+
+check_ruleset_payload="${temporary_dir}/check-ruleset.json"
+jq -n \
+  --arg name "${CHECK_RULESET_NAME}" \
+  --arg check "${REQUIRED_CHECK}" \
+  --argjson team_id "${team_id}" \
+  '{
+    name: $name,
+    target: "branch",
+    enforcement: "active",
+    bypass_actors: [
+      {
+        actor_id: $team_id,
+        actor_type: "Team",
+        bypass_mode: "always"
+      }
+    ],
+    conditions: {
+      ref_name: {
+        include: ["refs/heads/main"],
+        exclude: []
+      }
+    },
+    rules: [
       {
         type: "required_status_checks",
         parameters: {
@@ -176,28 +202,39 @@ jq -n \
         }
       }
     ]
-  }' >"${ruleset_payload}"
+  }' >"${check_ruleset_payload}"
 
-ruleset_id="$(
-  gh api "repos/${repository}/rulesets" |
-    jq -r --arg name "${RULESET_NAME}" \
-      '.[] | select(.name == $name and .source_type == "Repository") | .id' |
-    awk 'NR == 1'
-)"
+existing_rulesets="$(gh api "repos/${repository}/rulesets")"
 
-if [[ "${dry_run}" == true ]]; then
-  if [[ -n "${ruleset_id}" ]]; then
-    echo "Would update ruleset ${ruleset_id} in ${repository}:"
+upsert_ruleset() {
+  local name="$1"
+  local payload="$2"
+  local ruleset_id
+
+  ruleset_id="$(
+    jq -r --arg name "${name}" \
+      '.[] | select(.name == $name and .source_type == "Repository") | .id' \
+      <<<"${existing_rulesets}" |
+      awk 'NR == 1'
+  )"
+
+  if [[ "${dry_run}" == true ]]; then
+    if [[ -n "${ruleset_id}" ]]; then
+      echo "Would update ruleset ${ruleset_id} in ${repository}:"
+    else
+      echo "Would create ruleset in ${repository}:"
+    fi
+    jq . "${payload}"
+  elif [[ -n "${ruleset_id}" ]]; then
+    gh api --method PUT "repos/${repository}/rulesets/${ruleset_id}" \
+      --input "${payload}" >/dev/null
+    echo "Updated ${name} in ${repository}."
   else
-    echo "Would create ruleset in ${repository}:"
+    gh api --method POST "repos/${repository}/rulesets" \
+      --input "${payload}" >/dev/null
+    echo "Created ${name} in ${repository}."
   fi
-  jq . "${ruleset_payload}"
-elif [[ -n "${ruleset_id}" ]]; then
-  gh api --method PUT "repos/${repository}/rulesets/${ruleset_id}" \
-    --input "${ruleset_payload}" >/dev/null
-  echo "Updated required checks and reviews for main in ${repository}."
-else
-  gh api --method POST "repos/${repository}/rulesets" \
-    --input "${ruleset_payload}" >/dev/null
-  echo "Created required checks and reviews for main in ${repository}."
-fi
+}
+
+upsert_ruleset "${REVIEW_RULESET_NAME}" "${review_ruleset_payload}"
+upsert_ruleset "${CHECK_RULESET_NAME}" "${check_ruleset_payload}"
