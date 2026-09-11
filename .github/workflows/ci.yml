@@ -27,10 +27,17 @@ jobs:
             hooks/* \
             install \
             scripts/* \
-            tests/run
+            tests/run \
+            tests/rules
 
       - name: Run tests
         run: ./tests/run
+
+      - name: Set up tools
+        run: ./scripts/setup-tools
+
+      - name: Test detection rules
+        run: ./tests/rules
 
       - name: Exercise the shared action
         uses: ./
