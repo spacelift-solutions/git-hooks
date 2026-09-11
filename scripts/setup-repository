@@ -8,14 +8,22 @@ readonly REQUIRED_CHECK="Spacelift repository checks"
 readonly WORKFLOW_PATH=".github/workflows/spacelift-repository-checks.yml"
 
 usage() {
-  echo "usage: $0 [--dry-run] <owner/repository>" >&2
+  echo "usage: $0 [--dry-run] [--rulesets-only] <owner/repository>" >&2
 }
 
 dry_run=false
-if [[ "${1:-}" == "--dry-run" ]]; then
-  dry_run=true
+rulesets_only=false
+while [[ "${1:-}" == --* ]]; do
+  case "$1" in
+    --dry-run) dry_run=true ;;
+    --rulesets-only) rulesets_only=true ;;
+    *)
+      usage
+      exit 2
+      ;;
+  esac
   shift
-fi
+done
 
 repository="${1:-}"
 if [[ -z "${repository}" || "${repository}" != */* || -n "${2:-}" ]]; then
@@ -42,6 +50,7 @@ team_id="$(gh api "orgs/${owner}/teams/${REVIEWER_TEAM}" --jq .id)"
 temporary_dir="$(mktemp -d)"
 trap 'rm -rf "${temporary_dir}"' EXIT
 
+if [[ "${rulesets_only}" == false ]]; then
 workflow_file="${temporary_dir}/workflow.yml"
 cat >"${workflow_file}" <<'EOF'
 # Managed by spacelift-solutions/git-hooks.
@@ -120,6 +129,7 @@ if [[ "${workflow_sha}" != "unchanged" ]]; then
     echo "Installed ${WORKFLOW_PATH} in ${repository}."
   fi
 fi
+fi
 
 review_ruleset_payload="${temporary_dir}/review-ruleset.json"
 jq -n \
@@ -129,7 +139,13 @@ jq -n \
     name: $name,
     target: "branch",
     enforcement: "active",
-    bypass_actors: [],
+    bypass_actors: [
+      {
+        actor_id: $team_id,
+        actor_type: "Team",
+        bypass_mode: "always"
+      }
+    ],
     conditions: {
       ref_name: {
         include: ["refs/heads/main"],

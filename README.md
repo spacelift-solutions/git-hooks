@@ -57,9 +57,14 @@ repository rulesets:
 - `Require Spacelift repository checks` requires the shared status check while
   allowing The Four Ghostman team to bypass that check when necessary.
 
+The Four Ghostman team can bypass either ruleset when an emergency or
+bootstrap change cannot satisfy it normally.
+
 The script refuses to replace an unmanaged workflow. Use `--dry-run` to inspect
 the generated ruleset without changing the target repository. It requires an
 authenticated `gh` CLI with repository administration access.
+Use `--rulesets-only` when the target already has an equivalent workflow under
+a different path.
 
 ## Local hook
 
