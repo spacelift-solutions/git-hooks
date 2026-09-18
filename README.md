@@ -43,10 +43,13 @@ CI is the enforcement boundary; local hooks can always be bypassed.
 
 ### Configure a repository
 
-Use the bootstrap script to install the workflow and protect `main`:
+Download the `setup-repository_<os>_<arch>` binary for your platform from the
+[latest release](https://github.com/spacelift-solutions/git-hooks/releases/latest),
+make it executable, then use it to install the workflow and protect `main`.
+From a source checkout, run:
 
 ```sh
-scripts/setup-repository spacelift-solutions/example-repository
+go run ./cmd/setup-repository spacelift-solutions/example-repository
 ```
 
 It opens or updates a managed pull request for the workflow, then creates or
@@ -60,11 +63,27 @@ updates two repository rulesets:
 The Four Ghostman team can bypass either ruleset when an emergency or
 bootstrap change cannot satisfy it normally.
 
-The script refuses to replace an unmanaged workflow. Use `--dry-run` to inspect
-the generated ruleset without changing the target repository. It requires an
-authenticated `gh` CLI with repository administration access.
+The command refuses to replace an unmanaged workflow. Use `--dry-run` to
+inspect the generated rulesets without changing the target repository.
 Use `--rulesets-only` when the target already has an equivalent workflow under
 a different path.
+
+Authentication uses `GH_TOKEN`, then `GITHUB_TOKEN`. Alternatively, set
+`TF_VAR_github_app_id`, `TF_VAR_github_app_installation_id`, and
+`GITHUB_APP_PEM_FILE_PATH`; the command will mint a GitHub App installation
+token from the PEM private key. The token or app installation must have
+repository administration and contents access.
+
+## Releases
+
+The [release workflow](.github/workflows/release.yml) uses
+[`NerdsWhoFish/quill`](https://github.com/NerdsWhoFish/quill) to validate the
+cross-platform GoReleaser build on every pull request. A manual run from `main`
+publishes Linux and macOS binaries for AMD64 and ARM64.
+
+Choose **Release** or **Release Candidate**, then select a semantic-version
+increment. Release candidates do not consume the corresponding final version,
+and a failed publish removes its tag so the version can be retried.
 
 ## Local hook
 

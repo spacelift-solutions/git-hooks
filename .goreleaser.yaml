@@ -1,0 +1,35 @@
+version: 2
+
+project_name: setup-repository
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - main: ./cmd/setup-repository
+    binary: setup-repository
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    ldflags:
+      - -s -w
+
+archives:
+  - formats: [binary]
+    name_template: "setup-repository_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: checksums.txt
+
+release:
+  draft: false
+  prerelease: auto
