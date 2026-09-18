@@ -39,5 +39,17 @@ jobs:
       - name: Test detection rules
         run: ./tests/rules
 
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Test Go command
+        run: go test ./...
+
+      - name: Vet Go command
+        run: go vet ./...
+
       - name: Exercise the shared action
         uses: ./
