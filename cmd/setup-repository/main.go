@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 )
 
 const usageText = "usage: setup-repository [--dry-run] [--rulesets-only] <owner/repository>"
+const githubAppIDEnv = "TF_VAR_github_app_id"
 
 func main() {
 	os.Exit(run(context.Background(), os.Args[1:], os.Getenv, os.Stdout, os.Stderr))
@@ -30,6 +32,16 @@ func run(
 	if !ok {
 		fmt.Fprintln(stderr, usageText)
 		return 2
+	}
+
+	options.BypassAppID = setuprepo.BypassAppID
+	if configuredAppID := strings.TrimSpace(getenv(githubAppIDEnv)); configuredAppID != "" {
+		appID, err := strconv.ParseInt(configuredAppID, 10, 64)
+		if err != nil || appID <= 0 {
+			fmt.Fprintf(stderr, "%s must be a positive integer\n", githubAppIDEnv)
+			return 1
+		}
+		options.BypassAppID = appID
 	}
 
 	apiURL := getenv("GITHUB_API_URL")

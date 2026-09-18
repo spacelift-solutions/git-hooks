@@ -14,40 +14,32 @@ import (
 	"github.com/spacelift-solutions/git-hooks/internal/githubapi"
 )
 
-func TestRunCreatesWorkflowPullRequestAndRulesets(t *testing.T) {
+func TestRunCreatesRulesetsBeforeWritingWorkflowToMain(t *testing.T) {
 	t.Parallel()
 
 	var createdRulesets []map[string]any
 	var workflowWritten bool
+	var rulesetsConfigured bool
 	handler := func(writer http.ResponseWriter, request *http.Request) {
 		switch request.Method + " " + request.URL.Path {
 		case "GET /repos/acme/project":
 			writeJSON(t, writer, map[string]any{"default_branch": "main"})
 		case "GET /orgs/acme/teams/the-four-ghostman":
 			writeJSON(t, writer, map[string]any{"id": 77})
+		case "GET /repos/acme/project/rulesets":
+			writeJSON(t, writer, []any{})
+		case "POST /repos/acme/project/rulesets":
+			var payload map[string]any
+			readJSON(t, request, &payload)
+			createdRulesets = append(createdRulesets, payload)
+			rulesetsConfigured = len(createdRulesets) == 2
+			writer.WriteHeader(http.StatusCreated)
 		case "GET /repos/acme/project/contents/.github/workflows/spacelift-repository-checks.yml":
 			http.NotFound(writer, request)
-		case "GET /repos/acme/project/git/ref/heads/main":
-			writeJSON(t, writer, map[string]any{"object": map[string]any{"sha": "main-sha"}})
-		case "GET /repos/acme/project/pulls":
-			if request.URL.Query().Get("state") != "open" ||
-				request.URL.Query().Get("head") != "acme:"+SetupBranch {
-				t.Errorf("unexpected pull request query: %s", request.URL.RawQuery)
-			}
-			writeJSON(t, writer, []any{})
-		case "GET /repos/acme/project/git/ref/heads/" + SetupBranch:
-			http.NotFound(writer, request)
-		case "POST /repos/acme/project/git/refs":
-			var payload struct {
-				Reference string `json:"ref"`
-				SHA       string `json:"sha"`
-			}
-			readJSON(t, request, &payload)
-			if payload.Reference != "refs/heads/"+SetupBranch || payload.SHA != "main-sha" {
-				t.Errorf("branch payload = %#v", payload)
-			}
-			writer.WriteHeader(http.StatusCreated)
 		case "PUT /repos/acme/project/contents/.github/workflows/spacelift-repository-checks.yml":
+			if !rulesetsConfigured {
+				t.Error("workflow was written before rulesets were configured")
+			}
 			var payload struct {
 				Message string `json:"message"`
 				Content string `json:"content"`
@@ -63,27 +55,11 @@ func TestRunCreatesWorkflowPullRequestAndRulesets(t *testing.T) {
 				t.Errorf("written workflow differs:\n%s", decoded)
 			}
 			if payload.Message != "Configure Spacelift repository checks" ||
-				payload.Branch != SetupBranch ||
+				payload.Branch != "main" ||
 				payload.SHA != "" {
 				t.Errorf("workflow payload = %#v", payload)
 			}
 			workflowWritten = true
-			writer.WriteHeader(http.StatusCreated)
-		case "POST /repos/acme/project/pulls":
-			var payload map[string]string
-			readJSON(t, request, &payload)
-			if payload["base"] != "main" ||
-				payload["head"] != SetupBranch ||
-				payload["title"] != "Configure Spacelift repository checks" {
-				t.Errorf("pull request payload = %#v", payload)
-			}
-			writeJSON(t, writer, map[string]any{"html_url": "https://github.example/pull/1"})
-		case "GET /repos/acme/project/rulesets":
-			writeJSON(t, writer, []any{})
-		case "POST /repos/acme/project/rulesets":
-			var payload map[string]any
-			readJSON(t, request, &payload)
-			createdRulesets = append(createdRulesets, payload)
 			writer.WriteHeader(http.StatusCreated)
 		default:
 			unexpectedRequest(t, writer, request)
@@ -105,9 +81,9 @@ func TestRunCreatesWorkflowPullRequestAndRulesets(t *testing.T) {
 		t.Errorf("rulesets created in unexpected order: %#v", createdRulesets)
 	}
 	for _, expected := range []string{
-		"Workflow pull request: https://github.example/pull/1",
 		"Created " + ReviewRulesetName + " in acme/project.",
 		"Created " + CheckRulesetName + " in acme/project.",
+		"Configured " + WorkflowPath + " on main in acme/project.",
 	} {
 		if !strings.Contains(output, expected) {
 			t.Errorf("output does not contain %q:\n%s", expected, output)
@@ -118,8 +94,8 @@ func TestRunCreatesWorkflowPullRequestAndRulesets(t *testing.T) {
 func TestRunUpdatesManagedWorkflowAndRepositoryRuleset(t *testing.T) {
 	t.Parallel()
 
-	var resetBranch bool
 	var updatedWorkflowSHA string
+	var updatedWorkflowBranch string
 	var updatedRuleset bool
 	var createdCheckRuleset bool
 	handler := func(writer http.ResponseWriter, request *http.Request) {
@@ -129,37 +105,20 @@ func TestRunUpdatesManagedWorkflowAndRepositoryRuleset(t *testing.T) {
 		case "GET /orgs/acme/teams/the-four-ghostman":
 			writeJSON(t, writer, map[string]any{"id": 77})
 		case "GET /repos/acme/project/contents/.github/workflows/spacelift-repository-checks.yml":
-			if request.URL.Query().Get("ref") == "main" {
+			if request.Header.Get("Accept") == "application/vnd.github.raw+json" {
 				_, _ = io.WriteString(writer, "# Managed by spacelift-solutions/git-hooks.\nold\n")
 				return
 			}
 			writeJSON(t, writer, map[string]any{"sha": "old-workflow-sha"})
-		case "GET /repos/acme/project/git/ref/heads/main":
-			writeJSON(t, writer, map[string]any{"object": map[string]any{"sha": "new-main-sha"}})
-		case "GET /repos/acme/project/pulls":
-			writeJSON(t, writer, []any{})
-		case "GET /repos/acme/project/git/ref/heads/" + SetupBranch:
-			writeJSON(t, writer, map[string]any{"object": map[string]any{"sha": "old-branch-sha"}})
-		case "PATCH /repos/acme/project/git/refs/heads/" + SetupBranch:
-			var payload struct {
-				SHA   string `json:"sha"`
-				Force bool   `json:"force"`
-			}
-			readJSON(t, request, &payload)
-			if payload.SHA != "new-main-sha" || !payload.Force {
-				t.Errorf("reset payload = %#v", payload)
-			}
-			resetBranch = true
-			writer.WriteHeader(http.StatusOK)
 		case "PUT /repos/acme/project/contents/.github/workflows/spacelift-repository-checks.yml":
 			var payload struct {
-				SHA string `json:"sha"`
+				SHA    string `json:"sha"`
+				Branch string `json:"branch"`
 			}
 			readJSON(t, request, &payload)
 			updatedWorkflowSHA = payload.SHA
+			updatedWorkflowBranch = payload.Branch
 			writer.WriteHeader(http.StatusOK)
-		case "POST /repos/acme/project/pulls":
-			writeJSON(t, writer, map[string]any{"html_url": "https://github.example/pull/2"})
 		case "GET /repos/acme/project/rulesets":
 			writeJSON(t, writer, []map[string]any{
 				{"id": 101, "name": ReviewRulesetName, "source_type": "Repository"},
@@ -187,11 +146,11 @@ func TestRunUpdatesManagedWorkflowAndRepositoryRuleset(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	if !resetBranch {
-		t.Error("stale setup branch was not reset")
-	}
 	if updatedWorkflowSHA != "old-workflow-sha" {
 		t.Errorf("workflow SHA = %q, want old-workflow-sha", updatedWorkflowSHA)
+	}
+	if updatedWorkflowBranch != "main" {
+		t.Errorf("workflow branch = %q, want main", updatedWorkflowBranch)
 	}
 	if !updatedRuleset || !createdCheckRuleset {
 		t.Errorf(
@@ -200,62 +159,7 @@ func TestRunUpdatesManagedWorkflowAndRepositoryRuleset(t *testing.T) {
 			createdCheckRuleset,
 		)
 	}
-	if !strings.Contains(output, "Workflow pull request: https://github.example/pull/2") {
-		t.Errorf("output = %q", output)
-	}
-}
-
-func TestRunKeepsExistingPullRequestBranch(t *testing.T) {
-	t.Parallel()
-
-	var branchMutation bool
-	handler := func(writer http.ResponseWriter, request *http.Request) {
-		switch request.Method + " " + request.URL.Path {
-		case "GET /repos/acme/project":
-			writeJSON(t, writer, map[string]any{"default_branch": "main"})
-		case "GET /orgs/acme/teams/the-four-ghostman":
-			writeJSON(t, writer, map[string]any{"id": 77})
-		case "GET /repos/acme/project/contents/.github/workflows/spacelift-repository-checks.yml":
-			if request.URL.Query().Get("ref") == "main" {
-				_, _ = io.WriteString(writer, "# Managed by spacelift-solutions/git-hooks.\nold\n")
-				return
-			}
-			http.NotFound(writer, request)
-		case "GET /repos/acme/project/git/ref/heads/main":
-			writeJSON(t, writer, map[string]any{"object": map[string]any{"sha": "main-sha"}})
-		case "GET /repos/acme/project/pulls":
-			writeJSON(t, writer, []map[string]any{
-				{"html_url": "https://github.example/pull/existing"},
-			})
-		case "GET /repos/acme/project/git/ref/heads/" + SetupBranch:
-			writeJSON(t, writer, map[string]any{"object": map[string]any{"sha": "branch-sha"}})
-		case "PATCH /repos/acme/project/git/refs/heads/" + SetupBranch,
-			"POST /repos/acme/project/git/refs":
-			branchMutation = true
-			writer.WriteHeader(http.StatusOK)
-		case "PUT /repos/acme/project/contents/.github/workflows/spacelift-repository-checks.yml":
-			writer.WriteHeader(http.StatusOK)
-		case "GET /repos/acme/project/rulesets":
-			writeJSON(t, writer, []map[string]any{
-				{"id": 1, "name": ReviewRulesetName, "source_type": "Repository"},
-				{"id": 2, "name": CheckRulesetName, "source_type": "Repository"},
-			})
-		case "PUT /repos/acme/project/rulesets/1",
-			"PUT /repos/acme/project/rulesets/2":
-			writer.WriteHeader(http.StatusOK)
-		default:
-			unexpectedRequest(t, writer, request)
-		}
-	}
-
-	output, err := runWithServer(t, handler, Options{Repository: "acme/project"})
-	if err != nil {
-		t.Fatalf("Run() error = %v", err)
-	}
-	if branchMutation {
-		t.Error("branch with an open pull request was reset or recreated")
-	}
-	if !strings.Contains(output, "https://github.example/pull/existing") {
+	if !strings.Contains(output, "Configured "+WorkflowPath+" on main in acme/project.") {
 		t.Errorf("output = %q", output)
 	}
 }
@@ -366,7 +270,7 @@ func TestRunDryRunMakesNoMutatingRequests(t *testing.T) {
 		t.Error("dry run made a mutating request")
 	}
 	for _, expected := range []string{
-		"Would create or update a pull request",
+		"Would create or update " + WorkflowPath + " on main",
 		"Would update ruleset 9 in acme/project:",
 		"Would create ruleset in acme/project:",
 		`"name": "` + ReviewRulesetName + `"`,
@@ -432,7 +336,7 @@ func TestRunRejectsNonMainDefaultBranch(t *testing.T) {
 func TestRulesetPayloadsMatchManagedPayloads(t *testing.T) {
 	t.Parallel()
 
-	payloads := newRulesetPayloads(77)
+	payloads := newRulesetPayloads(77, 88)
 	if len(payloads) != 2 {
 		t.Fatalf("newRulesetPayloads() returned %d payloads", len(payloads))
 	}
@@ -445,6 +349,10 @@ func TestRulesetPayloadsMatchManagedPayloads(t *testing.T) {
 			"bypass_actors": [{
 				"actor_id": 77,
 				"actor_type": "Team",
+				"bypass_mode": "always"
+			}, {
+				"actor_id": 88,
+				"actor_type": "Integration",
 				"bypass_mode": "always"
 			}],
 			"conditions": {
@@ -482,6 +390,10 @@ func TestRulesetPayloadsMatchManagedPayloads(t *testing.T) {
 			"bypass_actors": [{
 				"actor_id": 77,
 				"actor_type": "Team",
+				"bypass_mode": "always"
+			}, {
+				"actor_id": 88,
+				"actor_type": "Integration",
 				"bypass_mode": "always"
 			}],
 			"conditions": {

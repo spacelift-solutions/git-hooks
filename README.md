@@ -52,16 +52,18 @@ From a source checkout, run:
 go run ./cmd/setup-repository spacelift-solutions/example-repository
 ```
 
-It opens or updates a managed pull request for the workflow, then creates or
-updates two repository rulesets:
+It creates or updates two repository rulesets, then writes the managed workflow
+directly to `main`:
 
 - `Require The Four Ghostman review` requires one team approval and dismisses
   approvals whenever new commits are pushed.
 - `Require Spacelift repository checks` requires the shared status check while
   allowing The Four Ghostman team to bypass that check when necessary.
 
-The Four Ghostman team can bypass either ruleset when an emergency or
-bootstrap change cannot satisfy it normally.
+The Four Ghostman team and `Spacelift-Solutions[Bot]` GitHub App can bypass
+either ruleset when an emergency or bootstrap change cannot satisfy it
+normally. Rulesets are updated before the workflow so the App can write the
+bootstrap commit directly to protected `main`.
 
 The command refuses to replace an unmanaged workflow. Use `--dry-run` to
 inspect the generated rulesets without changing the target repository.
