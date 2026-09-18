@@ -20,7 +20,7 @@ const (
 	ReviewerTeam      = "the-four-ghostman"
 	RequiredCheck     = "Spacelift repository checks"
 	WorkflowPath      = ".github/workflows/spacelift-repository-checks.yml"
-	SetupBranch       = "automation/spacelift-repository-checks"
+	BypassAppID       = 4991387
 
 	workflowMarker = "Managed by spacelift-solutions/git-hooks."
 )
@@ -56,6 +56,7 @@ type Options struct {
 	Repository   string
 	DryRun       bool
 	RulesetsOnly bool
+	BypassAppID  int64
 }
 
 // Runner applies the managed workflow and rulesets through the GitHub API.
@@ -102,11 +103,32 @@ func (runner *Runner) Run(ctx context.Context, options Options) error {
 	}
 
 	if !options.RulesetsOnly {
+		if err := runner.validateWorkflowOwnership(ctx, repositoryPath); err != nil {
+			return err
+		}
+	}
+
+	bypassAppID := options.BypassAppID
+	if bypassAppID == 0 {
+		bypassAppID = BypassAppID
+	}
+	if err := runner.configureRulesets(
+		ctx,
+		output,
+		options.Repository,
+		repositoryPath,
+		team.ID,
+		bypassAppID,
+		options.DryRun,
+	); err != nil {
+		return err
+	}
+
+	if !options.RulesetsOnly {
 		if err := runner.configureWorkflow(
 			ctx,
 			output,
 			options.Repository,
-			owner,
 			repositoryPath,
 			options.DryRun,
 		); err != nil {
@@ -114,14 +136,7 @@ func (runner *Runner) Run(ctx context.Context, options Options) error {
 		}
 	}
 
-	return runner.configureRulesets(
-		ctx,
-		output,
-		options.Repository,
-		repositoryPath,
-		team.ID,
-		options.DryRun,
-	)
+	return nil
 }
 
 func splitRepository(repository string) (string, string, error) {
@@ -132,11 +147,26 @@ func splitRepository(repository string) (string, string, error) {
 	return parts[0], parts[1], nil
 }
 
+func (runner *Runner) validateWorkflowOwnership(
+	ctx context.Context,
+	repositoryPath string,
+) error {
+	contentsPath := repositoryPath + "/contents/" + WorkflowPath
+	existingWorkflow, err := runner.Client.GetRaw(ctx, contentsPath+"?ref=main")
+	switch {
+	case err == nil && !bytes.Contains(existingWorkflow, []byte(workflowMarker)):
+		return fmt.Errorf("refusing to replace unmanaged workflow: %s", WorkflowPath)
+	case err != nil && !githubapi.IsNotFound(err):
+		return fmt.Errorf("read workflow from main: %w", err)
+	default:
+		return nil
+	}
+}
+
 func (runner *Runner) configureWorkflow(
 	ctx context.Context,
 	output io.Writer,
 	repository string,
-	owner string,
 	repositoryPath string,
 	dryRun bool,
 ) error {
@@ -155,110 +185,20 @@ func (runner *Runner) configureWorkflow(
 	if dryRun {
 		fmt.Fprintf(
 			output,
-			"Would create or update a pull request for %s in %s.\n",
+			"Would create or update %s on main in %s.\n",
 			WorkflowPath,
 			repository,
 		)
 		return nil
 	}
 
-	var mainReference struct {
-		Object struct {
-			SHA string `json:"sha"`
-		} `json:"object"`
-	}
-	if err := runner.Client.Do(
-		ctx,
-		http.MethodGet,
-		repositoryPath+"/git/ref/heads/main",
-		nil,
-		&mainReference,
-	); err != nil {
-		return fmt.Errorf("read main branch reference: %w", err)
-	}
-
-	query := url.Values{
-		"state": {"open"},
-		"head":  {owner + ":" + SetupBranch},
-	}
-	var pullRequests []struct {
-		URL string `json:"html_url"`
-	}
-	if err := runner.Client.Do(
-		ctx,
-		http.MethodGet,
-		repositoryPath+"/pulls?"+query.Encode(),
-		nil,
-		&pullRequests,
-	); err != nil {
-		return fmt.Errorf("find workflow pull request: %w", err)
-	}
-	openPullRequestURL := ""
-	if len(pullRequests) > 0 {
-		openPullRequestURL = pullRequests[0].URL
-	}
-
-	branchReferencePath := repositoryPath + "/git/ref/heads/" + SetupBranch
-	var branchReference json.RawMessage
-	branchErr := runner.Client.Do(
-		ctx,
-		http.MethodGet,
-		branchReferencePath,
-		nil,
-		&branchReference,
-	)
-	switch {
-	case githubapi.IsNotFound(branchErr):
-		payload := struct {
-			Reference string `json:"ref"`
-			SHA       string `json:"sha"`
-		}{
-			Reference: "refs/heads/" + SetupBranch,
-			SHA:       mainReference.Object.SHA,
-		}
-		if err := runner.Client.Do(
-			ctx,
-			http.MethodPost,
-			repositoryPath+"/git/refs",
-			payload,
-			nil,
-		); err != nil {
-			return fmt.Errorf("create setup branch: %w", err)
-		}
-	case branchErr != nil:
-		return fmt.Errorf("read setup branch reference: %w", branchErr)
-	case openPullRequestURL == "":
-		payload := struct {
-			SHA   string `json:"sha"`
-			Force bool   `json:"force"`
-		}{
-			SHA:   mainReference.Object.SHA,
-			Force: true,
-		}
-		if err := runner.Client.Do(
-			ctx,
-			http.MethodPatch,
-			repositoryPath+"/git/refs/heads/"+SetupBranch,
-			payload,
-			nil,
-		); err != nil {
-			return fmt.Errorf("reset setup branch: %w", err)
-		}
-	}
-
-	var branchWorkflow struct {
+	var existingMetadata struct {
 		SHA string `json:"sha"`
 	}
-	branchContentsPath := contentsPath + "?ref=" + url.QueryEscape(SetupBranch)
-	branchWorkflowErr := runner.Client.Do(
-		ctx,
-		http.MethodGet,
-		branchContentsPath,
-		nil,
-		&branchWorkflow,
-	)
-	if branchWorkflowErr != nil && !githubapi.IsNotFound(branchWorkflowErr) {
-		return fmt.Errorf("read workflow from setup branch: %w", branchWorkflowErr)
+	if err == nil {
+		if err := runner.Client.Do(ctx, http.MethodGet, contentsPath+"?ref=main", nil, &existingMetadata); err != nil {
+			return fmt.Errorf("read workflow metadata from main: %w", err)
+		}
 	}
 
 	workflowPayload := struct {
@@ -269,8 +209,8 @@ func (runner *Runner) configureWorkflow(
 	}{
 		Message: "Configure Spacelift repository checks",
 		Content: base64.StdEncoding.EncodeToString([]byte(Workflow)),
-		Branch:  SetupBranch,
-		SHA:     branchWorkflow.SHA,
+		Branch:  "main",
+		SHA:     existingMetadata.SHA,
 	}
 	if err := runner.Client.Do(
 		ctx,
@@ -279,37 +219,10 @@ func (runner *Runner) configureWorkflow(
 		workflowPayload,
 		nil,
 	); err != nil {
-		return fmt.Errorf("write workflow to setup branch: %w", err)
+		return fmt.Errorf("write workflow to main: %w", err)
 	}
 
-	if openPullRequestURL == "" {
-		pullRequestPayload := struct {
-			Base  string `json:"base"`
-			Head  string `json:"head"`
-			Title string `json:"title"`
-			Body  string `json:"body"`
-		}{
-			Base:  "main",
-			Head:  SetupBranch,
-			Title: "Configure Spacelift repository checks",
-			Body:  "Installs the shared Betterleaks workflow for pull requests and pushes targeting `main`.",
-		}
-		var pullRequest struct {
-			URL string `json:"html_url"`
-		}
-		if err := runner.Client.Do(
-			ctx,
-			http.MethodPost,
-			repositoryPath+"/pulls",
-			pullRequestPayload,
-			&pullRequest,
-		); err != nil {
-			return fmt.Errorf("create workflow pull request: %w", err)
-		}
-		openPullRequestURL = pullRequest.URL
-	}
-
-	fmt.Fprintf(output, "Workflow pull request: %s\n", openPullRequestURL)
+	fmt.Fprintf(output, "Configured %s on main in %s.\n", WorkflowPath, repository)
 	return nil
 }
 
@@ -386,7 +299,7 @@ type requiredStatusCheck struct {
 	Context string `json:"context"`
 }
 
-func newRulesetPayloads(teamID int64) []rulesetPayload {
+func newRulesetPayloads(teamID, bypassAppID int64) []rulesetPayload {
 	common := func(name string, rules []rulesetRule) rulesetPayload {
 		return rulesetPayload{
 			Name:        name,
@@ -396,6 +309,11 @@ func newRulesetPayloads(teamID int64) []rulesetPayload {
 				{
 					ActorID:    teamID,
 					ActorType:  "Team",
+					BypassMode: "always",
+				},
+				{
+					ActorID:    bypassAppID,
+					ActorType:  "Integration",
 					BypassMode: "always",
 				},
 			},
@@ -460,6 +378,7 @@ func (runner *Runner) configureRulesets(
 	repository string,
 	repositoryPath string,
 	teamID int64,
+	bypassAppID int64,
 	dryRun bool,
 ) error {
 	var existingRulesets []struct {
@@ -477,7 +396,7 @@ func (runner *Runner) configureRulesets(
 		return fmt.Errorf("list repository rulesets: %w", err)
 	}
 
-	for _, payload := range newRulesetPayloads(teamID) {
+	for _, payload := range newRulesetPayloads(teamID, bypassAppID) {
 		var rulesetID int64
 		for _, existing := range existingRulesets {
 			if existing.Name == payload.Name && existing.SourceType == "Repository" {

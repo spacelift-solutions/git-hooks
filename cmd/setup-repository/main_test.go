@@ -122,6 +122,20 @@ func TestRunUsesConfiguredAPIAndToken(t *testing.T) {
 				writeCommandJSON(t, writer, []any{})
 				return
 			}
+			var payload struct {
+				BypassActors []struct {
+					ActorID   int64  `json:"actor_id"`
+					ActorType string `json:"actor_type"`
+				} `json:"bypass_actors"`
+			}
+			if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+				t.Fatalf("decode ruleset payload: %v", err)
+			}
+			if len(payload.BypassActors) != 2 ||
+				payload.BypassActors[1].ActorID != 1234 ||
+				payload.BypassActors[1].ActorType != "Integration" {
+				t.Errorf("bypass actors = %#v", payload.BypassActors)
+			}
 			writer.WriteHeader(http.StatusCreated)
 		default:
 			t.Errorf("unexpected request: %s %s", request.Method, request.URL.Path)
@@ -131,8 +145,9 @@ func TestRunUsesConfiguredAPIAndToken(t *testing.T) {
 	defer server.Close()
 
 	environment := map[string]string{
-		"GH_TOKEN":       "test-token",
-		"GITHUB_API_URL": server.URL,
+		"GH_TOKEN":             "test-token",
+		"GITHUB_API_URL":       server.URL,
+		"TF_VAR_github_app_id": "1234",
 	}
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -149,6 +164,30 @@ func TestRunUsesConfiguredAPIAndToken(t *testing.T) {
 	if !strings.Contains(stdout.String(), "Created Require The Four Ghostman review") ||
 		!strings.Contains(stdout.String(), "Created Require Spacelift repository checks") {
 		t.Errorf("stdout = %q", stdout.String())
+	}
+}
+
+func TestRunRejectsInvalidGitHubAppID(t *testing.T) {
+	t.Parallel()
+
+	var stderr bytes.Buffer
+	exitCode := run(
+		context.Background(),
+		[]string{"--rulesets-only", "acme/project"},
+		func(name string) string {
+			if name == githubAppIDEnv {
+				return "not-an-id"
+			}
+			return ""
+		},
+		&bytes.Buffer{},
+		&stderr,
+	)
+	if exitCode != 1 {
+		t.Errorf("run() exit code = %d, want 1", exitCode)
+	}
+	if !strings.Contains(stderr.String(), githubAppIDEnv+" must be a positive integer") {
+		t.Errorf("stderr = %q", stderr.String())
 	}
 }
 
