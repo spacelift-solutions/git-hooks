@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Verifies the shared Spacelift credential rules actually fire. Fixtures are
+# assembled at runtime so no secret-shaped literal is committed to this
+# repository, which would otherwise trip the self-scan.
+
+if ! command -v betterleaks >/dev/null 2>&1; then
+  echo "betterleaks not installed; skipping detection rule tests" >&2
+  exit 0
+fi
+
+repo_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+shared_config="${repo_dir}/config/betterleaks.toml"
+
+temporary_dir="$(mktemp -d)"
+trap 'rm -rf "${temporary_dir}"' EXIT
+
+git -C "${temporary_dir}" init --quiet
+git -C "${temporary_dir}" config user.email "test@example.com"
+git -C "${temporary_dir}" config user.name "checks-test"
+
+# Assembled from parts on purpose (kept out of this file as literals).
+var_a="SPACELIFT_API_KEY_SECRET"
+val_a="FAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKE01"
+var_b="SPACELIFT_API_TOKEN"
+b_header="$(printf '%s' '{"alg":"HS256"}' | base64 | tr -d '=' | tr '/+' '_-')"
+b_payload="$(printf '%s' '{"sub":"fake"}' | base64 | tr -d '=' | tr '/+' '_-')"
+val_b="${b_header}.${b_payload}.fakesignature0123456789"
+
+{
+  printf '%s=%s\n' "${var_a}" "${val_a}"
+  printf '%s=%s\n' "${var_b}" "${val_b}"
+} >"${temporary_dir}/leak.env"
+
+git -C "${temporary_dir}" add leak.env
+git -C "${temporary_dir}" commit --quiet -m "fixture: planted credentials"
+
+report="${temporary_dir}/report.json"
+if betterleaks git \
+  --config "${shared_config}" \
+  --no-banner \
+  --report-format json \
+  --report-path "${report}" \
+  "${temporary_dir}"; then
+  echo "expected betterleaks to detect the planted Spacelift credentials" >&2
+  exit 1
+fi
+
+for rule in spacelift-api-key-secret spacelift-api-token; do
+  if ! grep -q "${rule}" "${report}"; then
+    echo "rule '${rule}' did not fire on its fixture" >&2
+    exit 1
+  fi
+done
+
+echo "Detection rule tests passed."

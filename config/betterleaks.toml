@@ -3,3 +3,15 @@ betterleaksMinVersion = "v1.8.0"
 
 [extend]
 useDefault = true
+
+[[rules]]
+id          = "spacelift-api-key-secret"
+description = "Spacelift API key secret"
+regex       = '''(?i)spacelift_api_key_secret['"]?\s*[:=]\s*['"]?([A-Za-z0-9]{40,})'''
+keywords    = ["spacelift_api_key_secret"]
+
+[[rules]]
+id          = "spacelift-api-token"
+description = "Spacelift API token (JWT)"
+regex       = '''(?i)spacelift_api_token['"]?\s*[:=]\s*['"]?(eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)'''
+keywords    = ["spacelift_api_token"]
