@@ -52,18 +52,22 @@ From a source checkout, run:
 go run ./cmd/setup-repository spacelift-solutions/example-repository
 ```
 
-It creates or updates two repository rulesets, then writes the managed workflow
-directly to `main`:
+It creates or updates three repository rulesets, then writes the managed
+workflow directly to `main`:
 
 - `Require The Four Ghostman review` requires one team approval and dismisses
   approvals whenever new commits are pushed.
 - `Require Spacelift repository checks` requires the shared status check while
   allowing The Four Ghostman team to bypass that check when necessary.
+- `Restrict tag pushes` prevents tag creation, updates, and deletion except by
+  The Four Ghostman team, `Spacelift-Solutions[Bot]`, and GitHub Actions.
 
 The Four Ghostman team and `Spacelift-Solutions[Bot]` GitHub App can bypass
-either ruleset when an emergency or bootstrap change cannot satisfy it
+any ruleset when an emergency or bootstrap change cannot satisfy it
 normally. Rulesets are updated before the workflow so the App can write the
-bootstrap commit directly to protected `main`.
+bootstrap commit directly to protected `main`. GitHub Actions can bypass only
+the tag ruleset, and workflows that push tags must still grant their
+`GITHUB_TOKEN` `contents: write` permission.
 
 The command refuses to replace an unmanaged workflow. Use `--dry-run` to
 inspect the generated rulesets without changing the target repository.

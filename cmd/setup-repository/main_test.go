@@ -123,6 +123,8 @@ func TestRunUsesConfiguredAPIAndToken(t *testing.T) {
 				return
 			}
 			var payload struct {
+				Name         string `json:"name"`
+				Target       string `json:"target"`
 				BypassActors []struct {
 					ActorID   int64  `json:"actor_id"`
 					ActorType string `json:"actor_type"`
@@ -131,10 +133,19 @@ func TestRunUsesConfiguredAPIAndToken(t *testing.T) {
 			if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
 				t.Fatalf("decode ruleset payload: %v", err)
 			}
-			if len(payload.BypassActors) != 2 ||
+			expectedActors := 2
+			if payload.Target == "tag" {
+				expectedActors = 3
+			}
+			if len(payload.BypassActors) != expectedActors ||
 				payload.BypassActors[1].ActorID != 1234 ||
 				payload.BypassActors[1].ActorType != "Integration" {
 				t.Errorf("bypass actors = %#v", payload.BypassActors)
+			}
+			if payload.Target == "tag" &&
+				(payload.BypassActors[2].ActorID != 15368 ||
+					payload.BypassActors[2].ActorType != "Integration") {
+				t.Errorf("GitHub Actions bypass actor = %#v", payload.BypassActors[2])
 			}
 			writer.WriteHeader(http.StatusCreated)
 		default:
@@ -162,7 +173,8 @@ func TestRunUsesConfiguredAPIAndToken(t *testing.T) {
 		t.Fatalf("run() exit code = %d, stderr = %q", exitCode, stderr.String())
 	}
 	if !strings.Contains(stdout.String(), "Created Require The Four Ghostman review") ||
-		!strings.Contains(stdout.String(), "Created Require Spacelift repository checks") {
+		!strings.Contains(stdout.String(), "Created Require Spacelift repository checks") ||
+		!strings.Contains(stdout.String(), "Created Restrict tag pushes") {
 		t.Errorf("stdout = %q", stdout.String())
 	}
 }
