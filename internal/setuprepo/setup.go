@@ -17,12 +17,14 @@ import (
 const (
 	ReviewRulesetName = "Require The Four Ghostman review"
 	CheckRulesetName  = "Require Spacelift repository checks"
+	TagRulesetName    = "Restrict tag pushes"
 	ReviewerTeam      = "the-four-ghostman"
 	RequiredCheck     = "Spacelift repository checks"
 	WorkflowPath      = ".github/workflows/spacelift-repository-checks.yml"
 	BypassAppID       = 4991387
 
-	workflowMarker = "Managed by spacelift-solutions/git-hooks."
+	githubActionsAppID int64 = 15368
+	workflowMarker           = "Managed by spacelift-solutions/git-hooks."
 )
 
 const Workflow = `# Managed by spacelift-solutions/git-hooks.
@@ -258,7 +260,7 @@ type referenceNameCondition struct {
 
 type rulesetRule struct {
 	Type       string `json:"type"`
-	Parameters any    `json:"parameters"`
+	Parameters any    `json:"parameters,omitempty"`
 }
 
 type pullRequestParameters struct {
@@ -299,24 +301,29 @@ type requiredStatusCheck struct {
 	Context string `json:"context"`
 }
 
+type updateParameters struct {
+	UpdateAllowsFetchAndMerge bool `json:"update_allows_fetch_and_merge"`
+}
+
 func newRulesetPayloads(teamID, bypassAppID int64) []rulesetPayload {
+	commonBypassActors := []bypassActor{
+		{
+			ActorID:    teamID,
+			ActorType:  "Team",
+			BypassMode: "always",
+		},
+		{
+			ActorID:    bypassAppID,
+			ActorType:  "Integration",
+			BypassMode: "always",
+		},
+	}
 	common := func(name string, rules []rulesetRule) rulesetPayload {
 		return rulesetPayload{
-			Name:        name,
-			Target:      "branch",
-			Enforcement: "active",
-			BypassActors: []bypassActor{
-				{
-					ActorID:    teamID,
-					ActorType:  "Team",
-					BypassMode: "always",
-				},
-				{
-					ActorID:    bypassAppID,
-					ActorType:  "Integration",
-					BypassMode: "always",
-				},
-			},
+			Name:         name,
+			Target:       "branch",
+			Enforcement:  "active",
+			BypassActors: commonBypassActors,
 			Conditions: conditions{
 				ReferenceName: referenceNameCondition{
 					Include: []string{"refs/heads/main"},
@@ -369,7 +376,37 @@ func newRulesetPayloads(teamID, bypassAppID int64) []rulesetPayload {
 		},
 	})
 
-	return []rulesetPayload{reviewRuleset, checkRuleset}
+	tagRuleset := rulesetPayload{
+		Name:        TagRulesetName,
+		Target:      "tag",
+		Enforcement: "active",
+		BypassActors: append(
+			append([]bypassActor{}, commonBypassActors...),
+			bypassActor{
+				ActorID:    githubActionsAppID,
+				ActorType:  "Integration",
+				BypassMode: "always",
+			},
+		),
+		Conditions: conditions{
+			ReferenceName: referenceNameCondition{
+				Include: []string{"~ALL"},
+				Exclude: []string{},
+			},
+		},
+		Rules: []rulesetRule{
+			{Type: "creation"},
+			{
+				Type: "update",
+				Parameters: updateParameters{
+					UpdateAllowsFetchAndMerge: false,
+				},
+			},
+			{Type: "deletion"},
+		},
+	}
+
+	return []rulesetPayload{reviewRuleset, checkRuleset, tagRuleset}
 }
 
 func (runner *Runner) configureRulesets(

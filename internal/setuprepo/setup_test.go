@@ -32,7 +32,7 @@ func TestRunCreatesRulesetsBeforeWritingWorkflowToMain(t *testing.T) {
 			var payload map[string]any
 			readJSON(t, request, &payload)
 			createdRulesets = append(createdRulesets, payload)
-			rulesetsConfigured = len(createdRulesets) == 2
+			rulesetsConfigured = len(createdRulesets) == 3
 			writer.WriteHeader(http.StatusCreated)
 		case "GET /repos/acme/project/contents/.github/workflows/spacelift-repository-checks.yml":
 			http.NotFound(writer, request)
@@ -73,16 +73,18 @@ func TestRunCreatesRulesetsBeforeWritingWorkflowToMain(t *testing.T) {
 	if !workflowWritten {
 		t.Fatal("workflow was not written")
 	}
-	if len(createdRulesets) != 2 {
-		t.Fatalf("created %d rulesets, want 2", len(createdRulesets))
+	if len(createdRulesets) != 3 {
+		t.Fatalf("created %d rulesets, want 3", len(createdRulesets))
 	}
 	if createdRulesets[0]["name"] != ReviewRulesetName ||
-		createdRulesets[1]["name"] != CheckRulesetName {
+		createdRulesets[1]["name"] != CheckRulesetName ||
+		createdRulesets[2]["name"] != TagRulesetName {
 		t.Errorf("rulesets created in unexpected order: %#v", createdRulesets)
 	}
 	for _, expected := range []string{
 		"Created " + ReviewRulesetName + " in acme/project.",
 		"Created " + CheckRulesetName + " in acme/project.",
+		"Created " + TagRulesetName + " in acme/project.",
 		"Configured " + WorkflowPath + " on main in acme/project.",
 	} {
 		if !strings.Contains(output, expected) {
@@ -98,6 +100,7 @@ func TestRunUpdatesManagedWorkflowAndRepositoryRuleset(t *testing.T) {
 	var updatedWorkflowBranch string
 	var updatedRuleset bool
 	var createdCheckRuleset bool
+	var createdTagRuleset bool
 	handler := func(writer http.ResponseWriter, request *http.Request) {
 		switch request.Method + " " + request.URL.Path {
 		case "GET /repos/acme/project":
@@ -132,10 +135,14 @@ func TestRunUpdatesManagedWorkflowAndRepositoryRuleset(t *testing.T) {
 				Name string `json:"name"`
 			}
 			readJSON(t, request, &payload)
-			if payload.Name != CheckRulesetName {
+			switch payload.Name {
+			case CheckRulesetName:
+				createdCheckRuleset = true
+			case TagRulesetName:
+				createdTagRuleset = true
+			default:
 				t.Errorf("created ruleset = %q", payload.Name)
 			}
-			createdCheckRuleset = true
 			writer.WriteHeader(http.StatusCreated)
 		default:
 			unexpectedRequest(t, writer, request)
@@ -152,11 +159,12 @@ func TestRunUpdatesManagedWorkflowAndRepositoryRuleset(t *testing.T) {
 	if updatedWorkflowBranch != "main" {
 		t.Errorf("workflow branch = %q, want main", updatedWorkflowBranch)
 	}
-	if !updatedRuleset || !createdCheckRuleset {
+	if !updatedRuleset || !createdCheckRuleset || !createdTagRuleset {
 		t.Errorf(
-			"ruleset operations: updated review=%t, created check=%t",
+			"ruleset operations: updated review=%t, created check=%t, created tag=%t",
 			updatedRuleset,
 			createdCheckRuleset,
+			createdTagRuleset,
 		)
 	}
 	if !strings.Contains(output, "Configured "+WorkflowPath+" on main in acme/project.") {
@@ -182,9 +190,11 @@ func TestRunLeavesCurrentWorkflowUntouched(t *testing.T) {
 			writeJSON(t, writer, []map[string]any{
 				{"id": 1, "name": ReviewRulesetName, "source_type": "Repository"},
 				{"id": 2, "name": CheckRulesetName, "source_type": "Repository"},
+				{"id": 3, "name": TagRulesetName, "source_type": "Repository"},
 			})
 		case "PUT /repos/acme/project/rulesets/1",
-			"PUT /repos/acme/project/rulesets/2":
+			"PUT /repos/acme/project/rulesets/2",
+			"PUT /repos/acme/project/rulesets/3":
 			writer.WriteHeader(http.StatusOK)
 		default:
 			if strings.Contains(request.URL.Path, "/contents/") ||
@@ -275,6 +285,7 @@ func TestRunDryRunMakesNoMutatingRequests(t *testing.T) {
 		"Would create ruleset in acme/project:",
 		`"name": "` + ReviewRulesetName + `"`,
 		`"name": "` + CheckRulesetName + `"`,
+		`"name": "` + TagRulesetName + `"`,
 	} {
 		if !strings.Contains(output, expected) {
 			t.Errorf("output does not contain %q:\n%s", expected, output)
@@ -295,9 +306,11 @@ func TestRunRulesetsOnlySkipsWorkflow(t *testing.T) {
 			writeJSON(t, writer, []map[string]any{
 				{"id": 1, "name": ReviewRulesetName, "source_type": "Repository"},
 				{"id": 2, "name": CheckRulesetName, "source_type": "Repository"},
+				{"id": 3, "name": TagRulesetName, "source_type": "Repository"},
 			})
 		case "PUT /repos/acme/project/rulesets/1",
-			"PUT /repos/acme/project/rulesets/2":
+			"PUT /repos/acme/project/rulesets/2",
+			"PUT /repos/acme/project/rulesets/3":
 			writer.WriteHeader(http.StatusOK)
 		default:
 			unexpectedRequest(t, writer, request)
@@ -337,7 +350,7 @@ func TestRulesetPayloadsMatchManagedPayloads(t *testing.T) {
 	t.Parallel()
 
 	payloads := newRulesetPayloads(77, 88)
-	if len(payloads) != 2 {
+	if len(payloads) != 3 {
 		t.Fatalf("newRulesetPayloads() returned %d payloads", len(payloads))
 	}
 
@@ -409,6 +422,40 @@ func TestRulesetPayloadsMatchManagedPayloads(t *testing.T) {
 					"strict_required_status_checks_policy": true,
 					"do_not_enforce_on_create": false
 				}
+			}]
+		}`,
+		`{
+			"name": "Restrict tag pushes",
+			"target": "tag",
+			"enforcement": "active",
+			"bypass_actors": [{
+				"actor_id": 77,
+				"actor_type": "Team",
+				"bypass_mode": "always"
+			}, {
+				"actor_id": 88,
+				"actor_type": "Integration",
+				"bypass_mode": "always"
+			}, {
+				"actor_id": 15368,
+				"actor_type": "Integration",
+				"bypass_mode": "always"
+			}],
+			"conditions": {
+				"ref_name": {
+					"include": ["~ALL"],
+					"exclude": []
+				}
+			},
+			"rules": [{
+				"type": "creation"
+			}, {
+				"type": "update",
+				"parameters": {
+					"update_allows_fetch_and_merge": false
+				}
+			}, {
+				"type": "deletion"
 			}]
 		}`,
 	}
